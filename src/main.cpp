@@ -7,6 +7,7 @@
 #include "apps/placeholder_app.h"
 #include "apps/app_subghz.h"
 #include "apps/app_nfc.h"
+#include "apps/app_ir.h"
 
 // aici doar asamblez piesele: creez managerii, ii leg intre ei, adaug
 // module in meniu. logica reala e in fisierele separate, main.cpp
@@ -17,11 +18,11 @@ DisplayManager displayManager;
 StorageManager storageManager;
 MenuSystem menuSystem;
 
-// Sub-GHz si NFC sunt module reale acum. restul raman placeholder pana
-// le implementez, la fel cum au fost si astea 2 la inceput
+// Sub-GHz, NFC si IR sunt module reale acum. restul raman placeholder
+// pana le implementez, la fel cum au fost si astea la inceput
 SubGhzApp appSubGhz(&displayManager, &storageManager);
 NfcApp appNfc(&displayManager);
-PlaceholderApp appIr("Infrared (IR)", &displayManager);
+IrApp appIr(&displayManager);
 PlaceholderApp appWifi("WiFi Attacks", &displayManager);
 PlaceholderApp appBle("BLE Attacks", &displayManager);
 PlaceholderApp appNrf24("NRF24 (MouseJack)", &displayManager);
