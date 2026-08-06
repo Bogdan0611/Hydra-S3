@@ -21,8 +21,8 @@ MenuSystem menuSystem;
 // Sub-GHz, NFC si IR sunt module reale acum. restul raman placeholder
 // pana le implementez, la fel cum au fost si astea la inceput
 SubGhzApp appSubGhz(&displayManager, &storageManager);
-NfcApp appNfc(&displayManager);
-IrApp appIr(&displayManager);
+NfcApp appNfc(&displayManager, &storageManager);
+IrApp appIr(&displayManager, &storageManager);
 PlaceholderApp appWifi("WiFi Attacks", &displayManager);
 PlaceholderApp appBle("BLE Attacks", &displayManager);
 PlaceholderApp appNrf24("NRF24 (MouseJack)", &displayManager);

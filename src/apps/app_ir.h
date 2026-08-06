@@ -1,6 +1,7 @@
 #pragma once
 #include "app_interface.h"
 #include "display_manager.h"
+#include "storage_manager.h"
 #include <IRrecv.h>
 #include <IRsend.h>
 #include <IRutils.h>
@@ -12,18 +13,32 @@
 #define IR_CAPTURE_BUFFER_SIZE 1024
 #define IR_TIMEOUT_MS 15
 
+// cate coduri salvate afisez in lista - fara scroll, tin simplu, incap
+// exact 5 randuri pe ecranul de 64px
+#define IR_MAX_SAVED_CODES 5
+
 // aplicatia IR, acelasi tipar ca la Sub-GHz si NFC: meniu intern cu
-// cateva functii, "Receive Code" si "Send Last Code" sunt functionale
+// cateva functii, "Receive Code", "Send Last Code" si "Saved Codes"
+// sunt functionale
 
 enum class IrScreen {
     LIST,
     RECEIVE,
+    SAVED_LIST,
     COMING_SOON
+};
+
+// un cod IR salvat pe SD - retinem doar ce are nevoie irsend.send() ca
+// sa-l poata retrimite mai tarziu
+struct SavedIrCode {
+    int decodeType;
+    uint64_t value;
+    uint16_t bits;
 };
 
 class IrApp : public App {
 public:
-    explicit IrApp(DisplayManager* disp);
+    IrApp(DisplayManager* disp, StorageManager* storageManager);
 
     void onEnter() override;
     void onExit() override;
@@ -35,6 +50,7 @@ public:
 
 private:
     DisplayManager* display;
+    StorageManager* storage;
     IRrecv irrecv;
     IRsend irsend;
 
@@ -42,7 +58,7 @@ private:
     int selectedIndex = 0;
 
     // ultimul cod primit, ramane retinut cat timp aplicatia e deschisa,
-    // ca sa poata fi retrimis cu "Send Last Code"
+    // ca sa poata fi retrimis cu "Send Last Code" sau salvat pe SD
     bool codeReceived = false;
     decode_results results;
 
@@ -53,16 +69,24 @@ private:
     // ca sa nu se mai intample
     bool receiverEnabled = false;
 
+    SavedIrCode savedCodes[IR_MAX_SAVED_CODES];
+    int savedCodeCount = 0;
+    int savedListIndex = 0;
+
     void drawList();
     void drawReceive();
+    void drawSavedList();
     void drawComingSoon();
 
     void handleListInput(InputEvent event);
     void handleReceiveInput(InputEvent event);
+    void handleSavedListInput(InputEvent event);
     void handleComingSoonInput(InputEvent event);
 
     void tryReceiveCode();
     void sendLastCode();
+    void saveCurrentCode();
+    void loadSavedCodes();
 
     void startReceiver();
     void stopReceiver();

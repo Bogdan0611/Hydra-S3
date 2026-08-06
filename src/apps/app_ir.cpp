@@ -1,6 +1,7 @@
 #include "apps/app_ir.h"
 #include "config.h"
 #include <Arduino.h>
+#include <SD.h>
 
 static const char* IR_ITEM_NAMES[IR_ITEM_COUNT] = {
     "Receive Code",
@@ -9,8 +10,9 @@ static const char* IR_ITEM_NAMES[IR_ITEM_COUNT] = {
     "Settings"
 };
 
-IrApp::IrApp(DisplayManager* disp)
+IrApp::IrApp(DisplayManager* disp, StorageManager* storageManager)
     : display(disp),
+      storage(storageManager),
       irrecv(PIN_IR_RX, IR_CAPTURE_BUFFER_SIZE, IR_TIMEOUT_MS, true),
       irsend(PIN_IR_TX) {}
 
@@ -49,6 +51,9 @@ void IrApp::onInput(InputEvent event) {
         case IrScreen::RECEIVE:
             handleReceiveInput(event);
             break;
+        case IrScreen::SAVED_LIST:
+            handleSavedListInput(event);
+            break;
         case IrScreen::COMING_SOON:
             handleComingSoonInput(event);
             break;
@@ -65,6 +70,9 @@ void IrApp::onLoop() {
                 tryReceiveCode();
             }
             drawReceive();
+            break;
+        case IrScreen::SAVED_LIST:
+            drawSavedList();
             break;
         case IrScreen::COMING_SOON:
             drawComingSoon();
@@ -88,6 +96,10 @@ void IrApp::handleListInput(InputEvent event) {
             currentScreen = IrScreen::RECEIVE;
         } else if (selectedIndex == 1) {
             sendLastCode();
+        } else if (selectedIndex == 2) {
+            loadSavedCodes();
+            savedListIndex = 0;
+            currentScreen = IrScreen::SAVED_LIST;
         } else {
             currentScreen = IrScreen::COMING_SOON;
         }
@@ -162,7 +174,8 @@ void IrApp::drawReceive() {
     snprintf(valueText, sizeof(valueText), "Value: %s", hexValue.c_str());
     display->drawText(4, 40, valueText);
 
-    display->drawText(4, 60, "OK=again  SET=back");
+    display->drawText(4, 52, "OK=again   R=save");
+    display->drawText(4, 60, "SET=back");
 
     display->sendToScreen();
 }
@@ -172,6 +185,8 @@ void IrApp::handleReceiveInput(InputEvent event) {
         // cautam un cod nou - repornesc receptorul, era oprit cat aratam rezultatul
         codeReceived = false;
         startReceiver();
+    } else if (event == InputEvent::RIGHT && codeReceived) {
+        saveCurrentCode();
     } else if (event == InputEvent::BACK) {
         stopReceiver();
         currentScreen = IrScreen::LIST;
@@ -198,6 +213,157 @@ void IrApp::sendLastCode() {
     display->drawText(4, 24, "Code sent!");
     display->sendToScreen();
     delay(800);
+}
+
+// ------------------------------------------------------------
+// salvarea codului curent pe SD (buton RIGHT din ecranul RECEIVE)
+// ------------------------------------------------------------
+
+void IrApp::saveCurrentCode() {
+    display->clear();
+
+    if (!storage->isReady()) {
+        display->drawText(4, 24, "Eroare: SD lipsa!");
+        display->sendToScreen();
+        delay(1000);
+        return;
+    }
+
+    // format simplu, o linie de text per cod: tip_protocol valoare_hex biti.
+    // scriu cu FILE_APPEND ca sa adaug la finalul fisierului, nu sa il rescriu
+    File file = SD.open("/ir_codes.txt", FILE_APPEND);
+    if (!file) {
+        display->drawText(4, 24, "Nu am putut salva");
+        display->sendToScreen();
+        delay(1000);
+        return;
+    }
+
+    size_t sizeBefore = file.size();
+
+    file.print((int)results.decode_type);
+    file.print(' ');
+    file.print(resultToHexidecimal(&results));
+    file.print(' ');
+    file.println(results.bits);
+    file.close();
+
+    // file.print() poate "reusi" fara sa arunce eroare chiar daca cardul
+    // nu retine nimic fizic (card mort/write-protejat) - redeschid si
+    // verific ca marimea a crescut cu adevarat, altfel "Salvat!" e minciuna
+    File verify = SD.open("/ir_codes.txt");
+    size_t sizeAfter = verify ? verify.size() : 0;
+    verify.close();
+
+    if (sizeAfter <= sizeBefore) {
+        Serial.println("[EROARE] ir_codes.txt nu a crescut dupa scriere - cardul nu retine datele.");
+        display->drawText(4, 24, "EROARE: cardul nu");
+        display->drawText(4, 40, "retine scrierea!");
+        display->sendToScreen();
+        delay(1500);
+        return;
+    }
+
+    display->drawText(4, 24, "Salvat!");
+    display->sendToScreen();
+    delay(800);
+}
+
+// ------------------------------------------------------------
+// ecranul SAVED_LIST - codurile salvate pe SD
+// ------------------------------------------------------------
+
+void IrApp::loadSavedCodes() {
+    savedCodeCount = 0;
+
+    if (!storage->isReady()) {
+        return;
+    }
+
+    File file = SD.open("/ir_codes.txt");
+    if (!file) {
+        // nu exista inca niciun cod salvat, e ok, lista ramane goala
+        return;
+    }
+
+    while (file.available() && savedCodeCount < IR_MAX_SAVED_CODES) {
+        String line = file.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) {
+            continue;
+        }
+
+        int firstSpace = line.indexOf(' ');
+        int secondSpace = line.indexOf(' ', firstSpace + 1);
+        if (firstSpace == -1 || secondSpace == -1) {
+            continue; // linie stricata, o sar
+        }
+
+        String typeStr = line.substring(0, firstSpace);
+        String valueStr = line.substring(firstSpace + 1, secondSpace);
+        String bitsStr = line.substring(secondSpace + 1);
+
+        // strtoull citeste direct hex-ul cu "0x" din fata, fara sa mai trebuiasca
+        // sa-l scot manual - mai sigur decat sscanf %llx pe ESP32
+        savedCodes[savedCodeCount].decodeType = typeStr.toInt();
+        savedCodes[savedCodeCount].value = strtoull(valueStr.c_str(), nullptr, 16);
+        savedCodes[savedCodeCount].bits = bitsStr.toInt();
+        savedCodeCount++;
+    }
+
+    file.close();
+}
+
+void IrApp::drawSavedList() {
+    display->clear();
+
+    if (savedCodeCount == 0) {
+        display->drawText(4, 24, "No saved codes");
+        display->drawText(4, 40, "SET=back");
+        display->sendToScreen();
+        return;
+    }
+
+    for (int i = 0; i < savedCodeCount; i++) {
+        int yPosition = 12 + (i * 12);
+        bool isSelected = (i == savedListIndex);
+
+        if (isSelected) {
+            display->drawSelectionBox(0, yPosition - 9, 128, 11);
+        }
+
+        String protocolName = typeToString((decode_type_t)savedCodes[i].decodeType);
+        char lineText[24];
+        snprintf(lineText, sizeof(lineText), "%d. %s", i + 1, protocolName.c_str());
+        display->drawText(4, yPosition, lineText, isSelected);
+    }
+
+    display->sendToScreen();
+}
+
+void IrApp::handleSavedListInput(InputEvent event) {
+    if (savedCodeCount == 0) {
+        if (event == InputEvent::BACK) {
+            currentScreen = IrScreen::LIST;
+        }
+        return;
+    }
+
+    if (event == InputEvent::UP) {
+        savedListIndex = (savedListIndex - 1 + savedCodeCount) % savedCodeCount;
+    } else if (event == InputEvent::DOWN) {
+        savedListIndex = (savedListIndex + 1) % savedCodeCount;
+    } else if (event == InputEvent::OK) {
+        SavedIrCode code = savedCodes[savedListIndex];
+        irsend.send((decode_type_t)code.decodeType, code.value, code.bits);
+
+        display->clear();
+        display->drawText(4, 24, "Code sent!");
+        display->sendToScreen();
+        delay(800);
+    } else if (event == InputEvent::BACK) {
+        currentScreen = IrScreen::LIST;
+    }
 }
 
 // ------------------------------------------------------------

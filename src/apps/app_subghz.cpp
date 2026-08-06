@@ -20,6 +20,10 @@ void SubGhzApp::onEnter() {
     radioReady = radio.begin();
     currentScreen = SubGhzScreen::LIST;
     selectedIndex = 0;
+
+    // pornesc numararea de la primul nume liber, nu de la 0 - altfel
+    // as suprascrie capturi salvate intr-o sesiune anterioara
+    savedFileCount = countExistingRawFiles();
 }
 
 void SubGhzApp::onExit() {
@@ -37,6 +41,9 @@ void SubGhzApp::onInput(InputEvent event) {
         case SubGhzScreen::RAW_LISTENING:
             handleRawListeningInput(event);
             break;
+        case SubGhzScreen::SAVED_LIST:
+            handleSavedListInput(event);
+            break;
         case SubGhzScreen::COMING_SOON:
             handleComingSoonInput(event);
             break;
@@ -50,6 +57,9 @@ void SubGhzApp::onLoop() {
             break;
         case SubGhzScreen::RAW_LISTENING:
             drawRawListening();
+            break;
+        case SubGhzScreen::SAVED_LIST:
+            drawSavedList();
             break;
         case SubGhzScreen::COMING_SOON:
             drawComingSoon();
@@ -70,6 +80,10 @@ void SubGhzApp::handleListInput(InputEvent event) {
         if (selectedIndex == 0) {
             startRawCapture();
             currentScreen = SubGhzScreen::RAW_LISTENING;
+        } else if (selectedIndex == 3) {
+            loadSavedSignals();
+            savedListIndex = 0;
+            currentScreen = SubGhzScreen::SAVED_LIST;
         } else {
             currentScreen = SubGhzScreen::COMING_SOON;
         }
@@ -180,9 +194,27 @@ void SubGhzApp::saveRawCaptureToSd() {
     }
 
     file.close();
-    savedFileCount++;
+
+    // verific ca fisierul chiar exista pe card cu continut, nu doar ca
+    // SD.open()/print() nu au dat eroare - un card mort poate "accepta"
+    // scrierea fara sa o retina fizic
+    File verify = SD.open(filename);
+    size_t sizeOnDisk = verify ? verify.size() : 0;
+    verify.close();
 
     display->clear();
+
+    if (sizeOnDisk == 0) {
+        Serial.println("[EROARE] Fisierul raw salvat e gol - cardul nu retine datele.");
+        display->drawText(4, 24, "EROARE: cardul nu");
+        display->drawText(4, 40, "retine scrierea!");
+        display->sendToScreen();
+        delay(1500);
+        return;
+    }
+
+    savedFileCount++;
+
     display->drawText(4, 24, "Salvat!");
 
     char savedFileText[32];
@@ -190,6 +222,115 @@ void SubGhzApp::saveRawCaptureToSd() {
     display->drawText(4, 40, savedFileText);
     display->sendToScreen();
     delay(1200);
+}
+
+// ------------------------------------------------------------
+// ecranul SAVED_LIST - rasfoire fisiere raw_*.txt de pe SD
+// (redarea/Replay e o bucata separata, nu e implementata inca)
+// ------------------------------------------------------------
+
+int SubGhzApp::countExistingRawFiles() {
+    if (!storage->isReady()) {
+        return 0;
+    }
+
+    File root = SD.open("/");
+    if (!root) {
+        return 0;
+    }
+
+    int count = 0;
+    File entry = root.openNextFile();
+    while (entry) {
+        String name = entry.name();
+        if (name.startsWith("/")) {
+            name = name.substring(1);
+        }
+        if (name.startsWith("raw_")) {
+            count++;
+        }
+        entry.close();
+        entry = root.openNextFile();
+    }
+    root.close();
+
+    return count;
+}
+
+void SubGhzApp::loadSavedSignals() {
+    savedSignalCount = 0;
+
+    if (!storage->isReady()) {
+        return;
+    }
+
+    File root = SD.open("/");
+    if (!root) {
+        return;
+    }
+
+    File entry = root.openNextFile();
+    while (entry && savedSignalCount < SUBGHZ_MAX_SAVED_SIGNALS) {
+        // pe unele placi entry.name() intoarce "/raw_0.txt", pe altele
+        // doar "raw_0.txt" - curat "/" din fata daca exista, ca sa fie
+        // consecvent
+        String name = entry.name();
+        if (name.startsWith("/")) {
+            name = name.substring(1);
+        }
+
+        if (name.startsWith("raw_")) {
+            strncpy(savedSignals[savedSignalCount].filename, name.c_str(), sizeof(savedSignals[savedSignalCount].filename) - 1);
+            savedSignals[savedSignalCount].filename[sizeof(savedSignals[savedSignalCount].filename) - 1] = '\0';
+            savedSignalCount++;
+        }
+
+        entry.close();
+        entry = root.openNextFile();
+    }
+    root.close();
+}
+
+void SubGhzApp::drawSavedList() {
+    display->clear();
+
+    if (savedSignalCount == 0) {
+        display->drawText(4, 24, "No saved signals");
+        display->drawText(4, 40, "SET=back");
+        display->sendToScreen();
+        return;
+    }
+
+    for (int i = 0; i < savedSignalCount; i++) {
+        int yPosition = 12 + (i * 12);
+        bool isSelected = (i == savedListIndex);
+
+        if (isSelected) {
+            display->drawSelectionBox(0, yPosition - 9, 128, 11);
+        }
+
+        display->drawText(4, yPosition, savedSignals[i].filename, isSelected);
+    }
+
+    display->sendToScreen();
+}
+
+void SubGhzApp::handleSavedListInput(InputEvent event) {
+    if (savedSignalCount == 0) {
+        if (event == InputEvent::BACK) {
+            currentScreen = SubGhzScreen::LIST;
+        }
+        return;
+    }
+
+    if (event == InputEvent::UP) {
+        savedListIndex = (savedListIndex - 1 + savedSignalCount) % savedSignalCount;
+    } else if (event == InputEvent::DOWN) {
+        savedListIndex = (savedListIndex + 1) % savedSignalCount;
+    } else if (event == InputEvent::BACK) {
+        currentScreen = SubGhzScreen::LIST;
+    }
+    // OK nu face nimic inca - redarea (Replay/TX) nu e implementata
 }
 
 // ------------------------------------------------------------
